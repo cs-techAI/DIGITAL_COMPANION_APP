@@ -19,6 +19,16 @@ YouTube processing—all with strict document grounding and role-based UI
 
 ---
 
+## 📁 Project Structure
+
+```
+DIGITAL_COMPANION_APP/
+│
+├── DIGITAL_COMPANION_APP.py
+├── .streamlit/
+    ├── secrets.toml
+
+
 ## 🖥️ Local Installation
 
 ### 1. Clone repository  
