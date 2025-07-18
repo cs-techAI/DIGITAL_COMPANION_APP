@@ -19,15 +19,6 @@ YouTube processing—all with strict document grounding and role-based UI
 
 ---
 
-## 📁 Project Structure
-
-```
-DIGITAL_COMPANION_APP/
-│
-├── DIGITAL_COMPANION_APP.py
-├── .streamlit/
-    ├── secrets.toml
-
 
 ## 🖥️ Local Installation
 
@@ -95,9 +86,19 @@ _The browser opens automatically at http://localhost:8501._
 | *CUDA available* | Install `faster-whisper[cuda]` and set `device="cuda"`. |
 | *Memory errors on huge PDFs* | Split PDF before upload or increase `chunk_size`. |
 
+
 ---
 
 ## ⚖️ Licensing & Credits
 This template wraps the following OSS projects: Streamlit, sentence-transformers,
 FAISS, faster-whisper, yt-dlp, youtube-transcript-api, streamlit-authenticator.
 All licenses remain with their respective authors.
+
+## 📁 Project Structure
+
+```
+DIGITAL_COMPANION_APP/
+│
+├── DIGITAL_COMPANION_APP.py
+├── .streamlit/
+    ├── secrets.toml
