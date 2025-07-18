@@ -132,7 +132,9 @@ session_defaults = {
     'user_role': None,
     'username': None,
     'name': None,
-    'authentication_status': None
+    'authentication_status': None,
+    'authenticator': None,  # Added for proper logout
+    'logout_clicked': False  # Added to track logout action
 }
 
 for key, value in session_defaults.items():
@@ -286,24 +288,24 @@ class VideoProcessor:
             return None
 
     def download_youtube_audio(self, url):
-        """Download YouTube audio using yt-dlp (more reliable than pytube)"""
+        """### FFMPEG_FREE - Download YouTube audio without ffmpeg/ffprobe"""
         try:
-            # Use yt-dlp instead of pytube for better reliability
-            temp_path = tempfile.mktemp(suffix='.mp3')
+            # Use completely ffmpeg-free approach
+            temp_path = tempfile.mktemp(suffix='.m4a')
 
+            # Configure yt-dlp to avoid any post-processing that requires ffmpeg
             ydl_opts = {
-                'format': 'bestaudio/best',
+                'format': 'bestaudio[ext=m4a]/bestaudio/best',  # Prefer m4a, fallback to best
                 'outtmpl': temp_path,
                 'quiet': True,
                 'no_warnings': True,
-                'extractaudio': True,
-                'audioformat': 'mp3',
+                'noplaylist': True,
+                'postprocessors': [],  # No post-processing to avoid ffmpeg dependency
                 'prefer_ffmpeg': False,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
+                'merge_output_format': None,  # Don't merge
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+                'ignoreerrors': True,
             }
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -313,13 +315,16 @@ class VideoProcessor:
             if os.path.exists(temp_path):
                 return temp_path
             else:
-                # Try alternative approach
-                temp_path2 = tempfile.mktemp(suffix='.wav')
+                # Try alternative format if m4a fails
+                temp_path2 = tempfile.mktemp(suffix='.webm')
                 ydl_opts2 = {
-                    'format': 'bestaudio',
+                    'format': 'bestaudio[ext=webm]/bestaudio',
                     'outtmpl': temp_path2,
                     'quiet': True,
                     'no_warnings': True,
+                    'noplaylist': True,
+                    'postprocessors': [],
+                    'prefer_ffmpeg': False,
                 }
 
                 with yt_dlp.YoutubeDL(ydl_opts2) as ydl:
@@ -645,7 +650,7 @@ class RAGVectorStore:
 
 
 class GroundedGeminiChatbot:
-    """Enhanced RAG Chatbot with strict grounding"""
+    """Enhanced RAG Chatbot with strict grounding and extended responses"""
 
     def __init__(self, api_key: str, grounding_validator: GroundingValidator):
         try:
@@ -659,11 +664,11 @@ class GroundedGeminiChatbot:
             self.client = None
 
     def _create_grounded_prompt(self, query: str, context: str) -> str:
-        """Create a strictly grounded prompt"""
+        """Create a strictly grounded prompt for detailed responses"""
         if not context.strip():
             return self._create_no_context_prompt(query)
 
-        # Enhanced system prompt for strict grounding
+        # Enhanced system prompt for strict grounding with detailed responses
         grounded_prompt = f"""You are a helpful assistant that MUST answer questions based ONLY on the provided context. 
 
 CRITICAL INSTRUCTIONS:
@@ -672,6 +677,10 @@ CRITICAL INSTRUCTIONS:
 3. If the context doesn't contain enough information to answer the question, you MUST say "I don't have enough information in the provided context to answer this question"
 4. Quote relevant parts of the context when possible
 5. Stay strictly within the bounds of the provided information
+6. Provide comprehensive, detailed answers when the context allows
+7. Use proper formatting with headers, bullet points, and structure when appropriate
+8. Include all relevant details from the context
+9. Organize your response logically with clear sections
 
 CONTEXT:
 {context}
@@ -683,6 +692,10 @@ REQUIREMENTS:
 - If information is not in the context, explicitly state that you don't have that information
 - Include specific quotes or references from the context to support your answer
 - Do not make assumptions or add information not present in the context
+- Provide as much detail as possible from the available context
+- Structure your answer clearly with proper formatting
+- Use markdown formatting for better readability (headers, lists, bold text)
+- Be comprehensive and thorough in your response
 
 ANSWER:"""
 
@@ -728,7 +741,7 @@ I can only provide answers based on the documents you've provided to me."""
 
     def generate_response(self, query: str, context: str = "", conversation_history: List[Dict] = None) -> Dict[
         str, Any]:
-        """Generate grounded response with validation"""
+        """Generate grounded response with validation - EXTENDED LENGTH (4096 tokens)"""
         try:
             if not self.client:
                 return {
@@ -740,14 +753,14 @@ I can only provide answers based on the documents you've provided to me."""
             # Create grounded prompt
             prompt = self._create_grounded_prompt(query, context)
 
-            # Generate response with enhanced configuration
+            # Generate response with enhanced configuration - INCREASED TOKEN LIMIT
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.1,  # Lower temperature for more deterministic responses
                     top_p=0.8,
-                    max_output_tokens=1024,
+                    max_output_tokens=4096,  # INCREASED FROM 1024 TO 4096 FOR LONGER DETAILED ANSWERS
                     stop_sequences=["EXTERNAL:", "OUTSIDE:", "GENERAL KNOWLEDGE:"]
                 )
             )
@@ -779,6 +792,9 @@ def authenticate_user():
         config['cookie']['key'],
         config['cookie']['expiry_days']
     )
+
+    # ### AUTH_LOGOUT - Store authenticator in session state for proper logout
+    st.session_state.authenticator = authenticator
 
     # **FIXED LOGIN CALL** - Use new syntax without parameters
     try:
@@ -893,16 +909,19 @@ def document_upload_section():
 
     # **UPDATED: Modified student limits as requested**
     upload_limits = {
-        'student': {'files': 10, 'size': 'unlimited'},  # Changed from 5 files and 10MB
+        'student': {'files': 10},  # Changed from 5 files and removed size limit
         'teacher': {'files': 20, 'size': '50MB'},
         'parent': {'files': 10, 'size': '25MB'}
     }
 
     role = st.session_state.user_role
-    limit = upload_limits.get(role, {'files': 10, 'size': 'unlimited'})
+    limit = upload_limits.get(role, {'files': 10})
 
     # **UPDATED: Display new limits**
-    st.sidebar.info(f"📊 **{role.title()} Limits:**\n- Max files: {limit['files']}")
+    if role == 'student':
+        st.sidebar.info(f"📊 **{role.title()} Limits:**\n- Max files: {limit['files']}")
+    else:
+        st.sidebar.info(f"📊 **{role.title()} Limits:**\n- Max files: {limit['files']}\n- Max size: {limit['size']}")
 
     # File upload tabs
     tab1, tab2, tab3 = st.sidebar.tabs(["📄 Documents", "🎥 Videos", "🌐 YouTube"])
@@ -1082,7 +1101,7 @@ def process_youtube(youtube_url):
 
 
 def chat_interface():
-    """Enhanced chat interface with role-based features"""
+    """Enhanced chat interface with role-based features and extended responses"""
     role = st.session_state.user_role
 
     # Role-based header
@@ -1101,10 +1120,11 @@ def chat_interface():
             st.session_state.grounding_validator
         )
 
-    # Display chat messages
+    # Display chat messages with enhanced formatting for longer responses
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+            # Enhanced markdown rendering for longer, detailed responses
+            st.markdown(message["content"], unsafe_allow_html=True)
 
             if message["role"] == "assistant":
                 # Show grounding information
@@ -1135,13 +1155,13 @@ def chat_interface():
                             st.markdown(f"*Type:* {source['metadata'].get('source_type', 'Unknown')}")
                             st.markdown(f"*File:* {source['metadata'].get('source_file', 'Unknown')}")
                             st.code(
-                                source['content'][:200] + "..." if len(source['content']) > 200 else source['content'])
+                                source['content'][:300] + "..." if len(source['content']) > 300 else source['content'])
 
     # Role-based chat input prompts
     prompts = {
-        'student': "Ask about your study materials...",
-        'teacher': "Query educational content...",
-        'parent': "Ask about learning materials..."
+        'student': "Ask detailed questions about your study materials...",
+        'teacher': "Query educational content for comprehensive analysis...",
+        'parent': "Ask about learning materials and educational content..."
     }
 
     # Chat input
@@ -1155,22 +1175,22 @@ def chat_interface():
 
         # Generate response
         with st.chat_message("assistant"):
-            with st.spinner("Thinking and grounding response..."):
-                # Search for relevant documents
+            with st.spinner("Generating comprehensive response..."):
+                # Search for relevant documents with extended context
                 context = ""
                 sources = []
 
                 if st.session_state.vector_store and st.session_state.documents:
                     search_results = st.session_state.vector_store.search(
                         prompt,
-                        k=3,
+                        k=5,  # Increased from 3 to 5 for more comprehensive context
                         relevance_threshold=0.3
                     )
                     if search_results:
                         context = "\n\n".join([result["content"] for result in search_results])
                         sources = search_results
 
-                # Generate grounded response
+                # Generate grounded response with extended length capability
                 response_data = st.session_state.chatbot.generate_response(
                     prompt,
                     context,
@@ -1181,8 +1201,8 @@ def chat_interface():
                 grounding_result = response_data['grounding_result']
                 is_fallback = response_data['is_fallback']
 
-                # Display response
-                st.markdown(response)
+                # Display response with enhanced formatting
+                st.markdown(response, unsafe_allow_html=True)
 
                 # Show grounding information
                 if grounding_result:
@@ -1212,7 +1232,7 @@ def chat_interface():
                             st.markdown(f"*Type:* {source['metadata'].get('source_type', 'Unknown')}")
                             st.markdown(f"*File:* {source['metadata'].get('source_file', 'Unknown')}")
                             st.code(
-                                source['content'][:200] + "..." if len(source['content']) > 200 else source['content'])
+                                source['content'][:300] + "..." if len(source['content']) > 300 else source['content'])
 
         # Add assistant message
         assistant_message = {
@@ -1227,40 +1247,62 @@ def chat_interface():
 
 
 def sidebar_controls():
-    """Enhanced sidebar controls with role-based features and permanent logout"""
+    """Enhanced sidebar controls with WORKING AUTO-REDIRECT LOGOUT"""
     st.sidebar.header("⚙️ Settings")
 
-    # **ADDED: Permanent logout button**
-    if st.sidebar.button("🚪 Logout", key="logout_btn", help="Logout from current session"):
-        # Clear all session state
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
+    # ### FIXED LOGOUT - With automatic redirect to login page
+    if (
+            st.session_state.get("authenticated") and
+            st.session_state.get("authentication_status") and
+            st.session_state.get("authenticator")
+    ):
+        # Store previous authentication status to detect logout
+        prev_auth_status = st.session_state.get("authentication_status")
 
-    st.sidebar.markdown("---")
+        st.sidebar.markdown("---")
+        # Use the official logout method from streamlit-authenticator
+        st.session_state.authenticator.logout('🚪 Logout', 'sidebar')
+        st.sidebar.markdown("---")
 
-    # User info
-    st.sidebar.markdown(f"""
-    <div class="metric-card">
-        <strong>👤 User:</strong> {st.session_state.name}<br>
-        <strong>🎭 Role:</strong> {st.session_state.user_role.title()}<br>
-        <strong>📧 Session:</strong> Active
-    </div>
-    """, unsafe_allow_html=True)
+        # Check if user has been logged out and redirect to login page
+        if prev_auth_status and not st.session_state.get("authentication_status"):
+            # Clear all session state data
+            st.session_state.authenticated = False
+            st.session_state.username = None
+            st.session_state.name = None
+            st.session_state.user_role = None
+
+            # Show logout success message
+            st.sidebar.success("✅ Successfully logged out!")
+
+            # Force page refresh to show login screen
+            time.sleep(0.5)  # Brief delay to show message
+            st.rerun()
+
+    # User info (only show if authenticated)
+    if st.session_state.get("authenticated"):
+        st.sidebar.markdown(f"""
+        <div class="metric-card">
+            <strong>👤 User:</strong> {st.session_state.name}<br>
+            <strong>🎭 Role:</strong> {st.session_state.user_role.title()}<br>
+            <strong>📧 Session:</strong> Active
+        </div>
+        """, unsafe_allow_html=True)
 
     # Model information
     with st.sidebar.expander("🤖 Model Info"):
         st.info("""
         **Model:** Gemini 2.0 Flash
+        **Max Tokens:** 4096 (Extended)
         **Embedding:** all-MiniLM-L6-v2
         **Vector Store:** FAISS
         **Grounding:** Strict Document-Only
         **Video:** faster-whisper (FFmpeg-free)
-        **YouTube:** yt-dlp + transcript-api
+        **YouTube:** yt-dlp (FFmpeg-free)
         """)
 
-    # Chat statistics
-    if st.session_state.messages:
+    # Chat statistics (only show if authenticated and have messages)
+    if st.session_state.get("authenticated") and st.session_state.messages:
         st.sidebar.header("📊 Chat Statistics")
 
         grounded_responses = 0
@@ -1287,19 +1329,20 @@ def sidebar_controls():
 
             st.sidebar.metric("Total Messages", len(st.session_state.messages))
 
-    # Controls
-    st.sidebar.header("🎮 Controls")
+    # Controls (only show if authenticated)
+    if st.session_state.get("authenticated"):
+        st.sidebar.header("🎮 Controls")
 
-    col1, col2 = st.sidebar.columns(2)
+        col1, col2 = st.sidebar.columns(2)
 
-    with col1:
-        if st.button("🗑️ Clear Chat"):
-            st.session_state.messages = []
-            st.rerun()
+        with col1:
+            if st.button("🗑️ Clear Chat"):
+                st.session_state.messages = []
+                st.rerun()
 
-    with col2:
-        if st.button("💾 Export Chat"):
-            export_chat()
+        with col2:
+            if st.button("💾 Export Chat"):
+                export_chat()
 
 
 def export_chat():
@@ -1315,7 +1358,8 @@ def export_chat():
             "messages": st.session_state.messages,
             "settings": {
                 "grounding_threshold": st.session_state.grounding_threshold,
-                "total_documents": len(st.session_state.documents)
+                "total_documents": len(st.session_state.documents),
+                "max_tokens": 4096
             },
             "session_stats": {
                 "total_messages": len(st.session_state.messages),
@@ -1340,7 +1384,7 @@ def main():
     if st.session_state.authenticated:
         apply_role_theme(st.session_state.user_role)
 
-    # Check authentication
+    # Check authentication - if not authenticated, show login and stop
     if not st.session_state.authenticated:
         authenticate_user()
         return
@@ -1377,6 +1421,7 @@ def main():
         <p>🎯 <strong>{role_footers.get(st.session_state.user_role, 'Advanced RAG Chatbot')}</strong></p>
         <p>🤖 Powered by Gemini 2.0 Flash • 🎥 Video Support • 🔒 Multi-User Authentication</p>
         <p>📝 Strict Grounding • 🚫 No FFmpeg Required • 🎯 Role-Based Access • 📤 Unlimited File Size</p>
+        <p>✨ Extended Responses (4096 tokens) • 🚪 Auto-Redirect Logout • 📊 Enhanced Analytics</p>
     </div>
     """, unsafe_allow_html=True)
 
