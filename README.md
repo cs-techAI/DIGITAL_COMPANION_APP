@@ -25,8 +25,6 @@ YouTube processing—all with strict document grounding and role-based UI
 git clone <your-repo>
 cd <your-repo>
 
-text
-
 ### 2. Create virtual environment  
 python -m venv .venv
 source .venv/bin/activate # Windows: .venv\Scripts\activate
